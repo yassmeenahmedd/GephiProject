@@ -26,8 +26,11 @@ import sys
 import os
 import math
 from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
 import networkx as nx
 
+# ── Matplotlib backend MUST be set before any pyplot import ─────────────────
 import matplotlib
 matplotlib.use("QtAgg")
 import matplotlib.pyplot as plt
@@ -42,26 +45,38 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTabWidget, QTableWidget, QTableWidgetItem,
     QFileDialog, QScrollArea, QFrame, QSplitter, QHeaderView,
-    QSizePolicy, QProgressBar, QStatusBar, QComboBox,
-    QCheckBox, QSlider, QGroupBox, QLineEdit,
-    QSpinBox, QDoubleSpinBox, QListWidget, QMessageBox, QTextEdit,
-    QRadioButton, QColorDialog, QAbstractItemView,
+    QSizePolicy, QGridLayout, QProgressBar, QStatusBar, QComboBox,
+    QCheckBox, QSlider, QGroupBox, QLineEdit, QDoubleSpinBox,
+    QSpinBox, QListWidget, QListWidgetItem, QMessageBox, QTextEdit,
+    QColorDialog, QRadioButton, QButtonGroup, QStackedWidget, QToolBar, QToolButton,
+    QSizePolicy, QScrollArea
 )
-from PyQt6.QtGui import QPixmap, QColor, QPalette
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import (
+    QPixmap, QFont, QColor, QPalette, QIcon, QFontDatabase,
+    QPainter, QLinearGradient, QBrush, QAction, QCursor
+)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QPoint
 
 # ── Backend imports ──────────────────────────────────────────────────────────
 try:
     from Data_Loader import (
-        load_graph_from_csv, get_graph_summary, list_node_attributes,
+        load_graph_from_csv, get_graph_summary, 
+        list_node_attributes,
     )
     from Metrics import (
         compute_global_metrics, compute_degree_distribution,
         compute_clustering, compute_path_lengths, compute_node_metrics_table,
-        render_degree_distribution, render_clustering_analysis,
-        render_path_length_analysis,
+        render_degree_distribution,
+        render_clustering_analysis, render_path_length_analysis,
     )
-    from Layout import compute_layout, LAYOUTS
+    from Layout import (
+        compute_layout, render_layout, render_all_layouts,
+        LAYOUTS, LAYOUT_DESCRIPTIONS,
+    )
+    from Visualizer import (
+        visualize_matplotlib, visualize_pyvis,
+        visualize_multi_layout, visualize_attribute_distribution,
+    )
     from Filtering import (
         compute_centralities, detect_communities,
         filter_by_centrality, filter_by_membership,
@@ -72,22 +87,52 @@ except ImportError as _err:
     BACKEND_AVAILABLE = False
     _IMPORT_ERR = str(_err)
 
+try:
+    from Community_Detection import (
+        ALGORITHMS as CD_ALGORITHMS,
+        run_community_detection, evaluate_partition,
+        partition_stats, partition_to_sets,
+        render_community_graph,
+        render_community_size_dist, render_comparison_table_img,
+        run_all_algorithms,
+    )
+    CD_AVAILABLE = True
+except ImportError as _cde:
+    CD_AVAILABLE = False
+    _CD_ERR = str(_cde)
+
+try:
+    from Link_Analysis import (
+        compute_all_link_metrics, build_metrics_table,
+        render_link_analysis_dashboard, render_centrality_comparison,
+        render_hits_chart, get_top_nodes,
+    )
+    LA_AVAILABLE = True
+except ImportError as _lae:
+    LA_AVAILABLE = False
+    _LA_ERR = str(_lae)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Theme
 # ─────────────────────────────────────────────────────────────────────────────
-BG        = "#0a0a12"
-PANEL     = "#0f0f1c"
-CARD      = "#141428"
-BORDER    = "#1e1e38"
-CYAN      = "#00d4ff"
-CYAN_DIM  = "#00a8cc"
-TEXT      = "#e0e0f0"
-MUTED     = "#5a5a7a"
-SUCCESS   = "#00e676"
-WARNING   = "#ffb300"
-DANGER    = "#ff5252"
-PINK      = "#f472b6"
-CANVAS_BG = "#060610"
+
+BG           = "#0a0a12"
+PANEL        = "#0f0f1c"
+CARD         = "#141428"
+BORDER       = "#1e1e38"
+CYAN         = "#00d4ff"
+CYAN_DIM     = "#00a8cc"
+PURPLE       = "#7c3aed"
+TEXT         = "#e0e0f0"
+MUTED        = "#5a5a7a"
+SUCCESS      = "#00e676"
+WARNING      = "#ffb300"
+DANGER       = "#ff5252"
+PINK         = "#f472b6"
+
+# Canvas background
+CANVAS_BG    = "#060610"
 
 STYLESHEET = f"""
 * {{ box-sizing: border-box; }}
@@ -121,11 +166,7 @@ QPushButton#tool {{
     border-radius:4px; padding:4px 10px; font-size:10px; font-weight:500;
 }}
 QPushButton#tool:hover {{ background:{BORDER}; color:{CYAN}; }}
-QPushButton#danger {{
-    background:transparent; color:{DANGER}; border:1px solid {DANGER}44;
-    border-radius:4px; padding:4px 10px; font-size:10px;
-}}
-QPushButton#danger:hover {{ background:{DANGER}18; }}
+QPushButton#tool:checked {{ background:{CYAN}28; color:{CYAN}; border-color:{CYAN}; }}
 QScrollBar:vertical {{ background:{BG}; width:5px; border-radius:2px; }}
 QScrollBar::handle:vertical {{ background:{BORDER}; border-radius:2px; min-height:20px; }}
 QScrollBar::handle:vertical:hover {{ background:{CYAN_DIM}; }}
@@ -184,11 +225,8 @@ QLineEdit, QSpinBox, QDoubleSpinBox {{
     background:{CARD}; color:{TEXT}; border:1px solid {BORDER};
     border-radius:4px; padding:4px 8px; font-size:11px;
 }}
-QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{ border-color:{CYAN_DIM}; }}
-QSpinBox::up-button, QSpinBox::down-button,
-QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
-    background:{PANEL}; border:none; width:14px;
-}}
+QLineEdit:focus, QSpinBox:focus {{ border-color:{CYAN_DIM}; }}
+QSpinBox::up-button, QSpinBox::down-button {{ background:{PANEL}; border:none; width:14px; }}
 QTextEdit {{
     background:{CARD}; color:{MUTED}; border:1px solid {BORDER};
     border-radius:5px; font-family:'JetBrains Mono','Consolas',monospace;
@@ -210,12 +248,16 @@ QLabel#section_lbl   {{
 # ─────────────────────────────────────────────────────────────────────────────
 #  Palettes & shape map
 # ─────────────────────────────────────────────────────────────────────────────
+
 CLASS_COLORS = {
-    "1A":"#e6194b","1B":"#f58231","2A":"#3cb44b","2B":"#bfef45",
-    "3A":"#4363d8","3B":"#42d4f4","4A":"#911eb4","4B":"#f032e6",
-    "5A":"#9A6324","5B":"#C8860A","Teachers":"#2ec4b6",
+    "1A": "#e6194b", "1B": "#f58231",
+    "2A": "#3cb44b", "2B": "#bfef45",
+    "3A": "#4363d8", "3B": "#42d4f4",
+    "4A": "#911eb4", "4B": "#f032e6",
+    "5A": "#9A6324", "5B": "#C8860A",
+    "Teachers": "#2ec4b6",
 }
-GENDER_COLORS = {"M":"#4363d8","F":"#e6194b","Unknown":"#888"}
+GENDER_COLORS = {"M": "#4363d8", "F": "#e6194b", "Unknown": "#888"}
 QUALITATIVE = [
     "#e6194b","#3cb44b","#4363d8","#f58231","#911eb4",
     "#42d4f4","#f032e6","#bfef45","#fabed4","#469990","#9A6324",
@@ -338,8 +380,7 @@ class Worker(QThread):
                     )
                 elif mode == "membership":
                     Gf = filter_by_membership(
-                        G, comms,
-                        community_ids=k.get("community_ids"),
+                        G,
                         classes=k.get("classes"),
                     )
                 else:
@@ -352,7 +393,72 @@ class Worker(QThread):
                 result = {
                     "Gf": Gf, "stats": stats,
                     "centralities": cents, "communities": comms,
-                    "images": {"compare": "_fcomp.png", "community": "_fcomm.png"},
+                    "images": {
+                        "compare":   "_fcomp.png",
+                        "cent_dist": "_fdist.png",
+                        "scatter":   "_fscatter.png",
+                        "community": "_fcomm.png",
+                    }
+                }
+
+
+            elif t == "community":
+                G = k["G"]
+                algo = k.get("algorithm", "Vertex-Subgraph")
+                self.progress.emit(f"Running {algo} …", 20)
+                partition = run_community_detection(G, algo, **{key: val for key, val in k.items() if key not in ["G", "pos", "algorithm", "gt_attr"]})
+                self.progress.emit("Evaluating …", 55)
+                metrics_eval = evaluate_partition(G, partition,
+                                                   ground_truth_attr=k.get("gt_attr","Class"))
+                pstats = partition_stats(partition)
+                self.progress.emit("Rendering …", 75)
+                render_community_graph(G, partition, k.get("pos"),
+                                        "_cd_graph.png", title=f"{algo} Communities")
+                render_community_size_dist(partition, "_cd_sizes.png",
+                                            title=f"{algo} — Community Sizes")
+                self.progress.emit("Done", 100)
+                result = {
+                    "partition": partition,
+                    "eval":      metrics_eval,
+                    "stats":     pstats,
+                    "images": {
+                        "graph":  "_cd_graph.png",
+                        "sizes":  "_cd_sizes.png",
+                    }
+                }
+
+            elif t == "community_compare":
+                import time
+                G = k["G"]
+                algos = k.get("algos", list(CD_ALGORITHMS.keys()))
+                k_val = k.get("resolution", 1.0)
+                n_comm = k.get("n_communities", 5)
+                results = run_all_algorithms(G, resolution=k_val, n_communities=n_comm, seed=42)
+                self.progress.emit("Rendering table …", 85)
+                render_comparison_table_img(results, "_cd_compare.png")
+                self.progress.emit("Done", 100)
+                result = {"results": results, "compare_img": "_cd_compare.png"}
+
+            elif t == "link_analysis":
+                G = k["G"]
+                self.progress.emit("Computing link metrics …", 20)
+                metrics_la = compute_all_link_metrics(G)
+                self.progress.emit("Building table …", 50)
+                table_la   = build_metrics_table(G, metrics_la, top_n=0)
+                self.progress.emit("Rendering dashboard …", 65)
+                render_link_analysis_dashboard(G, metrics_la, k.get("pos"),
+                                                "_la_dash.png",
+                                                color_attr=k.get("color_attr","Class"))
+                render_centrality_comparison(G, metrics_la, "_la_compare.png")
+                self.progress.emit("Done", 100)
+                result = {
+                    "metrics":    metrics_la,
+                    "table":      table_la,
+                    "images": {
+                        "dashboard": "_la_dash.png",
+                        "compare":   "_la_compare.png",
+                        "hits":      "_la_hits.png",
+                    }
                 }
 
             self.finished.emit(result)
@@ -966,6 +1072,8 @@ class RightSidebar(QFrame):
         self._ov_color_swatch=ColorSwatch("#e6194b")
         ov_c_row.addWidget(self._ov_color_chk); ov_c_row.addWidget(self._ov_color_swatch); ov_c_row.addStretch()
         root.addLayout(ov_c_row)
+        # Auto-check when user picks a color
+        self._ov_color_swatch.color_changed.connect(lambda: self._ov_color_chk.setChecked(True))
 
         # Shape override
         ov_s_row=QHBoxLayout()
@@ -973,6 +1081,8 @@ class RightSidebar(QFrame):
         self._ov_shape_combo=QComboBox(); self._ov_shape_combo.addItems(list(SHAPE_OPTIONS.keys()))
         ov_s_row.addWidget(self._ov_shape_chk); ov_s_row.addWidget(self._ov_shape_combo,1)
         root.addLayout(ov_s_row)
+        # Auto-check when user selects a shape
+        self._ov_shape_combo.currentTextChanged.connect(lambda: self._ov_shape_chk.setChecked(True))
 
         # Label override
         ov_l_row=QHBoxLayout()
@@ -980,6 +1090,8 @@ class RightSidebar(QFrame):
         self._ov_label_edit=QLineEdit(); self._ov_label_edit.setPlaceholderText("Custom text")
         ov_l_row.addWidget(self._ov_label_chk); ov_l_row.addWidget(self._ov_label_edit,1)
         root.addLayout(ov_l_row)
+        # Auto-check when user types a label
+        self._ov_label_edit.textChanged.connect(lambda: self._ov_label_chk.setChecked(True) if self._ov_label_edit.text().strip() else None)
 
         btn_row=QHBoxLayout()
         self._ov_apply_btn=QPushButton("✔ Apply"); self._ov_apply_btn.setObjectName("primary")
@@ -1053,7 +1165,8 @@ class RightSidebar(QFrame):
             return None
         color = self._ov_color_swatch.get_color() if self._ov_color_chk.isChecked() else None
         shape = self._ov_shape_combo.currentText()  if self._ov_shape_chk.isChecked() else None
-        label = self._ov_label_edit.text().strip()  if self._ov_label_chk.isChecked() else None
+        label_text = self._ov_label_edit.text().strip() if self._ov_label_chk.isChecked() else None
+        label = label_text if label_text else None  # Ensure empty string becomes None
         return (self._selected_node, color, shape, label)
 
 
@@ -1211,9 +1324,7 @@ class FilteringPanel(QWidget):
 
         mem_grp=QGroupBox("MEMBERSHIP"); memg=QVBoxLayout(mem_grp)
         self._classes_edit=QLineEdit(); self._classes_edit.setPlaceholderText("Classes e.g. 3A,4A")
-        self._comms_edit=QLineEdit(); self._comms_edit.setPlaceholderText("Community IDs e.g. 0,1")
         memg.addWidget(QLabel("Classes:")); memg.addWidget(self._classes_edit)
-        memg.addWidget(QLabel("Community IDs:")); memg.addWidget(self._comms_edit)
         ctrl_row.addWidget(mem_grp); root.addLayout(ctrl_row)
 
         btn_row=QHBoxLayout()
@@ -1245,11 +1356,9 @@ class FilteringPanel(QWidget):
         mode="centrality" if self._m_cent.isChecked() else "membership"
         cls_text=self._classes_edit.text().strip()
         classes={c.strip() for c in cls_text.split(",") if c.strip()} or None
-        try: community_ids={int(x.strip()) for x in self._comms_edit.text().strip().split(",") if x.strip()} or None
-        except ValueError: community_ids=None
         kwargs={"G":self._G,"mode":mode,"deg_range":self._deg_sl.get_range(),
                 "bet_range":self._bet_sl.get_range(),"clo_range":self._clo_sl.get_range(),
-                "pr_range":self._pr_sl.get_range(),"classes":classes,"community_ids":community_ids}
+                "pr_range":self._pr_sl.get_range(),"classes":classes}
         self._run_btn.setEnabled(False); self._progress.show(); self._progress.setValue(0)
         self._worker=Worker("filter",kwargs)
         self._worker.progress.connect(lambda m,p:(self._progress.setValue(p),self._status(m)))
@@ -1273,6 +1382,406 @@ class FilteringPanel(QWidget):
 # ─────────────────────────────────────────────────────────────────────────────
 #  Main window
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Community Detection Panel
+# ─────────────────────────────────────────────────────────────────────────────
+
+class CommunityPanel(QWidget):
+    """Runs community detection algorithms and evaluates them."""
+
+    partition_ready = pyqtSignal(dict)   # emits the partition for canvas coloring
+
+    def __init__(self, status_cb):
+        super().__init__()
+        self._status  = status_cb
+        self._G       = None
+        self._pos     = {}
+        self._worker  = None
+        self._last_partition = {}
+        self._build()
+
+    def set_graph(self, G, pos=None):
+        self._G   = G
+        self._pos = pos or {}
+        self._run_btn.setEnabled(True)
+        self._cmp_btn.setEnabled(True)
+
+    def _build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(6)
+
+        # Controls row
+        ctrl = QHBoxLayout(); ctrl.setSpacing(10)
+
+        algo_grp = QGroupBox("ALGORITHM")
+        ag = QHBoxLayout(algo_grp)
+        self._algo_combo = QComboBox()
+        algo_names = (list(CD_ALGORITHMS.keys()) if CD_AVAILABLE
+                    else ["Vertex-Subgraph","Girvan-Newman","K-Clique"])
+        self._algo_combo.addItems(algo_names)
+        self._algo_combo.currentTextChanged.connect(self._on_algo_changed)
+        ag.addWidget(self._algo_combo)
+        ctrl.addWidget(algo_grp)
+
+        k_grp = QGroupBox("Resolution")
+        kg = QHBoxLayout(k_grp)
+        self._k_spin = QDoubleSpinBox()
+        self._k_spin.setMinimum(0.1)
+        self._k_spin.setMaximum(5.0)
+        self._k_spin.setValue(1.0)
+        self._k_spin.setSingleStep(0.1)
+        self._k_spin.setToolTip("Resolution parameter for Louvain community detection")
+        kg.addWidget(self._k_spin)
+        ctrl.addWidget(k_grp)
+        self._k_group = k_grp
+
+        eval_grp = QGroupBox("GROUND TRUTH ATTR")
+        eg = QHBoxLayout(eval_grp)
+        self._gt_combo = QComboBox()
+        self._gt_combo.addItems(["Class","Gender","None"])
+        eg.addWidget(self._gt_combo)
+        ctrl.addWidget(eval_grp)
+
+        self._run_btn = QPushButton("▶  Detect Communities")
+        self._run_btn.setObjectName("primary")
+        self._run_btn.setEnabled(False)
+        self._run_btn.clicked.connect(self._run_single)
+
+        self._cmp_btn = QPushButton("⊞  Compare All Algorithms")
+        self._cmp_btn.setObjectName("secondary")
+        self._cmp_btn.setEnabled(False)
+        self._cmp_btn.clicked.connect(self._run_compare)
+
+        self._progress = QProgressBar()
+        self._progress.setFixedWidth(180); self._progress.setFixedHeight(2)
+        self._progress.setTextVisible(False); self._progress.hide()
+
+        ctrl.addWidget(self._run_btn)
+        ctrl.addWidget(self._cmp_btn)
+        ctrl.addStretch()
+        ctrl.addWidget(self._progress)
+        root.addLayout(ctrl)
+
+        self._on_algo_changed(self._algo_combo.currentText())
+
+        # Stats chips
+        stats_row = QHBoxLayout()
+        self._chips = {
+            "n_comm":       StatChip("Communities",  "—", CYAN),
+            "conductance":  StatChip("Conductance", "—", PINK),
+            "intra_density":StatChip("Edge Density", "—", SUCCESS),
+            "nmi":          StatChip("NMI",         "—", WARNING),
+        }
+        for chip in self._chips.values():
+            stats_row.addWidget(chip)
+        stats_row.addStretch()
+        root.addLayout(stats_row)
+
+        # Image tabs
+        tabs = QTabWidget()
+        self._viewers = {}
+        for label, key in [
+            ("Graph","graph"),
+            ("Sizes","sizes"), ("Compare","compare")
+        ]:
+            w = QWidget()
+            v = QVBoxLayout(w); v.setContentsMargins(4,4,4,4)
+            viewer = ImageViewer(); viewer.clear_image()
+            v.addWidget(viewer)
+            tabs.addTab(w, label)
+            self._viewers[key] = viewer
+
+        # Evaluation table tab
+        tbl_w = QWidget()
+        tv = QVBoxLayout(tbl_w); tv.setContentsMargins(4,4,4,4)
+        self._eval_table = QTableWidget()
+        self._eval_table.setAlternatingRowColors(True)
+        self._eval_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents)
+        self._eval_table.verticalHeader().setVisible(False)
+        self._eval_table.setSortingEnabled(True)
+        tv.addWidget(self._eval_table)
+        tabs.addTab(tbl_w, "Evaluation Table")
+
+        root.addWidget(tabs)
+
+    def _run_single(self):
+        if not self._G: return
+        gt = self._gt_combo.currentText()
+        if gt == "None": gt = "Class"
+        self._run_btn.setEnabled(False)
+        self._progress.show(); self._progress.setValue(0)
+        kwargs = {
+            "G": self._G,
+            "pos": self._pos,
+            "algorithm": self._algo_combo.currentText(),
+            "gt_attr": gt,
+        }
+        if self._algo_combo.currentText() == "Louvain":
+            kwargs["resolution"] = self._k_spin.value()
+        self._worker = Worker("community", kwargs)
+        self._worker.progress.connect(lambda m,p: (self._progress.setValue(p), self._status(m)))
+        self._worker.finished.connect(self._on_single_done)
+        self._worker.error.connect(self._on_error)
+        self._worker.start()
+
+    def _on_algo_changed(self, algo):
+        self._k_group.setVisible(algo == "Louvain")
+
+    def _on_single_done(self, res):
+        self._run_btn.setEnabled(True); self._progress.hide()
+        ev = res["eval"]; st = res["stats"]
+        self._chips["n_comm"].set_value(str(st.get("n_communities","—")))
+        self._chips["conductance"].set_value(str(ev.get("conductance","—")))
+        self._chips["intra_density"].set_value(str(ev.get("intra_density","—")))
+        self._chips["nmi"].set_value(str(ev.get("nmi","—")))
+        for key, viewer in self._viewers.items():
+            if key in res["images"]:
+                viewer.load(res["images"][key])
+        # fill evaluation table
+        self._fill_eval_table([{"metric": k, "value": v}
+                                for k, v in ev.items()])
+        self._last_partition = res["partition"]
+        self.partition_ready.emit(res["partition"])
+        self._status(f"Communities: {st.get('n_communities','?')}  "
+                     f"NMI={ev.get('nmi','?')}")
+
+    def _run_compare(self):
+        if not self._G: return
+        gt = self._gt_combo.currentText()
+        if gt == "None": gt = "Class"
+        self._cmp_btn.setEnabled(False)
+        self._progress.show(); self._progress.setValue(0)
+        self._worker = Worker("community_compare", {
+            "G": self._G,
+            "algos": (list(CD_ALGORITHMS.keys()) if CD_AVAILABLE
+                      else ["Louvain","Vertex-Subgraph","Girvan-Newman"]),
+            "gt_attr": gt,
+            "resolution": self._k_spin.value(),  # Pass resolution value for Louvain
+            "n_communities": None,  # Let Girvan-Newman find optimal communities
+        })
+        self._worker.progress.connect(lambda m,p: (self._progress.setValue(p), self._status(m)))
+        self._worker.finished.connect(self._on_compare_done)
+        self._worker.error.connect(self._on_error)
+        self._worker.start()
+
+    def _on_compare_done(self, res):
+        self._cmp_btn.setEnabled(True); self._progress.hide()
+        self._viewers["compare"].load(res["compare_img"])
+        # Fill eval table with all results
+        rows = []
+        for r in res["results"]:
+            row = {"algorithm": r["algorithm"]}
+            row.update(r["metrics"])
+            rows.append(row)
+        self._fill_eval_table(rows, multi=True)
+        self._status("Algorithm comparison complete")
+
+    def _fill_eval_table(self, data, multi=False):
+        if not data: return
+        cols = list(data[0].keys())
+        self._eval_table.setRowCount(len(data))
+        self._eval_table.setColumnCount(len(cols))
+        self._eval_table.setHorizontalHeaderLabels(
+            [c.replace("_"," ").upper() for c in cols])
+        numeric_keys = {"conductance","intra_density","nmi","value"}
+        for ri, row in enumerate(data):
+            for ci, key in enumerate(cols):
+                val = row[key]
+                item = QTableWidgetItem(str(val))
+                item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                    if key in numeric_keys else
+                    Qt.AlignmentFlag.AlignLeft  | Qt.AlignmentFlag.AlignVCenter)
+                if key in ("nmi",):
+                    item.setForeground(QColor(CYAN))
+                self._eval_table.setItem(ri, ci, item)
+        self._eval_table.resizeColumnsToContents()
+
+    def _on_error(self, msg):
+        self._run_btn.setEnabled(True); self._cmp_btn.setEnabled(True)
+        self._progress.hide()
+        self._status(f"Error: {msg[:80]}")
+        QMessageBox.critical(self, "Community Detection Error", msg)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Link Analysis Panel
+# ─────────────────────────────────────────────────────────────────────────────
+
+class LinkAnalysisPanel(QWidget):
+    """PageRank, Betweenness, HITS,Eigenvector + comparison."""
+
+    def __init__(self, status_cb):
+        super().__init__()
+        self._status  = status_cb
+        self._G       = None
+        self._pos     = {}
+        self._worker  = None
+        self._build()
+
+    def set_graph(self, G, pos=None):
+        self._G   = G
+        self._pos = pos or {}
+        self._run_btn.setEnabled(True)
+
+    def _build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(6)
+
+        ctrl = QHBoxLayout(); ctrl.setSpacing(10)
+
+        col_grp = QGroupBox("COLOR NODES BY")
+        cg = QHBoxLayout(col_grp)
+        self._color_combo = QComboBox()
+        self._color_combo.addItems(["Class","Gender","None"])
+        cg.addWidget(self._color_combo)
+        ctrl.addWidget(col_grp)
+
+        self._run_btn = QPushButton("▶  Run Link Analysis")
+        self._run_btn.setObjectName("primary")
+        self._run_btn.setEnabled(False)
+        self._run_btn.clicked.connect(self._run)
+
+        self._export_btn = QPushButton("⬇  Export Table CSV")
+        self._export_btn.setObjectName("secondary")
+        self._export_btn.setEnabled(False)
+        self._export_btn.clicked.connect(self._export_csv)
+
+        self._progress = QProgressBar()
+        self._progress.setFixedWidth(180); self._progress.setFixedHeight(2)
+        self._progress.setTextVisible(False); self._progress.hide()
+
+        ctrl.addWidget(self._run_btn)
+        ctrl.addWidget(self._export_btn)
+        ctrl.addStretch()
+        ctrl.addWidget(self._progress)
+        root.addLayout(ctrl)
+
+        # Metric chips
+        stats_row = QHBoxLayout()
+        self._chips = {
+            "top_pr":     StatChip("Top PageRank Node", "—",  CYAN),
+            "top_bet":    StatChip("Top Betweenness",   "—",  "e87040"),
+            "top_eigen":  StatChip("Top Eigenvector",   "—",  SUCCESS),
+        }
+        for chip in self._chips.values():
+            stats_row.addWidget(chip)
+        stats_row.addStretch()
+        root.addLayout(stats_row)
+
+        # Image tabs
+        tabs = QTabWidget()
+        self._viewers = {}
+        for label, key in [
+            ("Dashboard","dashboard"),
+            ("Centrality Comparison","compare")
+        ]:
+            w = QWidget()
+            v = QVBoxLayout(w); v.setContentsMargins(4,4,4,4)
+            viewer = ImageViewer(); viewer.clear_image()
+            v.addWidget(viewer)
+            tabs.addTab(w, label)
+            self._viewers[key] = viewer
+
+        # Node ranking table tab
+        tbl_w = QWidget()
+        tv = QVBoxLayout(tbl_w); tv.setContentsMargins(4,4,4,4)
+        self._tbl = QTableWidget()
+        self._tbl.setAlternatingRowColors(True)
+        self._tbl.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents)
+        self._tbl.verticalHeader().setVisible(False)
+        self._tbl.setSortingEnabled(True)
+        tv.addWidget(self._tbl)
+        tabs.addTab(tbl_w, "Node Rankings")
+        root.addWidget(tabs)
+        self._table_data = []
+
+    def _run(self):
+        if not self._G: return
+        ca = self._color_combo.currentText()
+        if ca == "None": ca = "Class"
+        self._run_btn.setEnabled(False)
+        self._progress.show(); self._progress.setValue(0)
+        self._worker = Worker("link_analysis", {
+            "G": self._G, "pos": self._pos, "color_attr": ca,
+        })
+        self._worker.progress.connect(lambda m,p: (self._progress.setValue(p), self._status(m)))
+        self._worker.finished.connect(self._on_done)
+        self._worker.error.connect(self._on_error)
+        self._worker.start()
+
+    def _on_done(self, res):
+        self._run_btn.setEnabled(True); self._progress.hide()
+        metrics = res["metrics"]
+        pr  = metrics.get("pagerank", {})
+        bt  = metrics.get("betweenness", {})
+        ev  = metrics.get("eigenvector", {})
+        if pr:
+            top_pr = max(pr, key=pr.get)
+            self._chips["top_pr"].set_value(
+                f"{top_pr} ({pr[top_pr]:.4f})")
+        if bt:
+            top_bt = max(bt, key=bt.get)
+            self._chips["top_bet"].set_value(
+                f"{top_bt} ({bt[top_bt]:.4f})")
+        if ev:
+            top_ev = max(ev, key=ev.get)
+            self._chips["top_eigen"].set_value(
+                f"{top_ev} ({ev[top_ev]:.4f})")
+        imgs = res["images"]
+        for key, viewer in self._viewers.items():
+            if key in imgs: viewer.load(imgs[key])
+        self._table_data = res["table"]
+        self._fill_table(res["table"])
+        self._export_btn.setEnabled(True)
+        self._status("Link analysis complete")
+
+    def _fill_table(self, data):
+        if not data: return
+        cols = list(data[0].keys())
+        self._tbl.setRowCount(len(data))
+        self._tbl.setColumnCount(len(cols))
+        self._tbl.setHorizontalHeaderLabels([c.replace("_"," ").upper() for c in cols])
+        num_keys = {"pagerank","betweenness","eigenvector",
+                    "closeness","degree"}
+        for ri, row in enumerate(data):
+            for ci, key in enumerate(cols):
+                val = row[key]
+                item = QTableWidgetItem(str(val))
+                item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                    if key in num_keys else
+                    Qt.AlignmentFlag.AlignLeft  | Qt.AlignmentFlag.AlignVCenter)
+                if key == "pagerank":    item.setForeground(QColor(CYAN))
+                elif key == "betweenness": item.setForeground(QColor(WARNING))
+                self._tbl.setItem(ri, ci, item)
+        self._tbl.resizeColumnsToContents()
+
+    def _export_csv(self):
+        if not self._table_data: return
+        import csv
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Link Analysis", "link_analysis.csv", "CSV (*.csv)")
+        if path:
+            with open(path, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=self._table_data[0].keys())
+                writer.writeheader()
+                writer.writerows(self._table_data)
+            self._status(f"Exported: {os.path.basename(path)}")
+
+    def _on_error(self, msg):
+        self._run_btn.setEnabled(True); self._progress.hide()
+        self._status(f"Error: {msg[:80]}")
+        QMessageBox.critical(self, "Link Analysis Error", msg)
+
+
 class GephiApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1293,34 +1802,64 @@ class GephiApp(QMainWindow):
         self._global_prog.setTextVisible(False); self._global_prog.hide()
         root_lay.addWidget(self._global_prog)
 
-        main_splitter=QSplitter(Qt.Orientation.Horizontal); main_splitter.setHandleWidth(1)
-        self._left=LeftSidebar(); self._right=RightSidebar()
+        # ── Main splitter: left sidebar | center | right sidebar ─────────
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_splitter.setHandleWidth(1)
 
-        center=QWidget(); center_lay=QVBoxLayout(center)
-        center_lay.setContentsMargins(0,0,0,0); center_lay.setSpacing(0)
-        v_splitter=QSplitter(Qt.Orientation.Vertical); v_splitter.setHandleWidth(2)
+        self._left  = LeftSidebar()
+        self._right = RightSidebar()
 
-        cf=QFrame(); cf.setStyleSheet(f"background:{CANVAS_BG};")
-        cfl=QVBoxLayout(cf); cfl.setContentsMargins(0,0,0,0)
-        self._canvas=NetworkCanvas()
-        cfl.addWidget(self._canvas); cfl.addWidget(self._build_canvas_toolbar())
+        # Center: canvas on top, analysis tabs below
+        center_widget = QWidget()
+        center_lay = QVBoxLayout(center_widget)
+        center_lay.setContentsMargins(0,0,0,0)
+        center_lay.setSpacing(0)
 
-        self._analysis_tabs=QTabWidget()
-        self._metrics_panel=MetricsPanel(self._status)
-        self._filter_panel=FilteringPanel(self._status)
-        self._analysis_tabs.addTab(self._metrics_panel,"  Metrics  ")
-        self._analysis_tabs.addTab(self._filter_panel, "  Filtering  ")
+        v_splitter = QSplitter(Qt.Orientation.Vertical)
+        v_splitter.setHandleWidth(2)
+
+        # Canvas
+        canvas_frame = QFrame()
+        canvas_frame.setStyleSheet(f"background:{CANVAS_BG};")
+        cf_lay = QVBoxLayout(canvas_frame)
+        cf_lay.setContentsMargins(0,0,0,0)
+        self._canvas = NetworkCanvas()
+        cf_lay.addWidget(self._canvas)
+
+        # Canvas overlay toolbar
+        cf_lay.addWidget(self._build_canvas_toolbar())
+
+        # Analysis tabs
+        self._analysis_tabs = QTabWidget()
+        self._metrics_panel  = MetricsPanel(self._status)
+        self._filter_panel   = FilteringPanel(self._status)
+        self._analysis_tabs.addTab(self._metrics_panel, "  Metrics  ")
+        self._analysis_tabs.addTab(self._filter_panel,  "  Filtering  ")
+        self._community_panel = CommunityPanel(self._status)
+        self._link_panel      = LinkAnalysisPanel(self._status)
+        self._analysis_tabs.addTab(self._community_panel, "  Communities  ")
+        self._analysis_tabs.addTab(self._link_panel,      "  Link Analysis  ")
         self._analysis_tabs.setFixedHeight(380)
 
-        v_splitter.addWidget(cf); v_splitter.addWidget(self._analysis_tabs)
-        v_splitter.setSizes([560,380]); center_lay.addWidget(v_splitter)
+        v_splitter.addWidget(canvas_frame)
+        v_splitter.addWidget(self._analysis_tabs)
+        v_splitter.setSizes([560, 380])
+        center_lay.addWidget(v_splitter)
 
-        main_splitter.addWidget(self._left); main_splitter.addWidget(center)
-        main_splitter.addWidget(self._right); main_splitter.setSizes([220,1000,240])
-        root_lay.addWidget(main_splitter,stretch=1)
+        main_splitter.addWidget(self._left)
+        main_splitter.addWidget(center_widget)
+        main_splitter.addWidget(self._right)
+        main_splitter.setSizes([220, 1000, 220])
 
-        self._metric_bar=MetricBar(); root_lay.addWidget(self._metric_bar)
-        self._statusbar=QStatusBar(); self._statusbar.setFixedHeight(24)
+        root_lay.addWidget(main_splitter, stretch=1)
+
+        # ── Metric bar ───────────────────────────────────────────────────
+        self._metric_bar = MetricBar()
+        root_lay.addWidget(self._metric_bar)
+
+        # ── Status bar ───────────────────────────────────────────────────
+        self._statusbar = QStatusBar()
+        self._statusbar.setFixedHeight(24)
         self.setStatusBar(self._statusbar)
         self._status("Load CSV files to begin  ·  Scroll to zoom  ·  Drag to pan  ·  Click nodes to inspect")
 
@@ -1356,21 +1895,40 @@ class GephiApp(QMainWindow):
         self._graph_info=QLabel("No graph loaded")
         self._graph_info.setStyleSheet(f"color:{MUTED};font-size:10px;font-family:monospace;")
 
-        lay.addWidget(title); lay.addWidget(dot); lay.addWidget(sub); lay.addStretch()
-        lay.addWidget(self._directed_chk); lay.addWidget(self._aggregate_chk)
-        lay.addWidget(self._graph_info); lay.addWidget(self._load_btn); lay.addWidget(self._progress)
+        lay.addWidget(title)
+        lay.addWidget(dot)
+        lay.addWidget(sub)
+        lay.addStretch()
+        lay.addWidget(self._directed_chk)
+        lay.addWidget(self._aggregate_chk)
+        lay.addWidget(self._graph_info)
+        lay.addWidget(self._load_btn)
+        lay.addWidget(self._progress)
         return bar
 
     def _build_canvas_toolbar(self):
-        bar=QWidget(); bar.setFixedHeight(34)
-        bar.setStyleSheet(f"background:{PANEL};border-top:1px solid {BORDER};")
-        lay=QHBoxLayout(bar); lay.setContentsMargins(12,2,12,2); lay.setSpacing(6)
-        def mk(lbl,tip,fn):
-            b=QPushButton(lbl); b.setObjectName("tool"); b.setToolTip(tip); b.clicked.connect(fn); return b
-        lay.addWidget(mk("⊙ Fit","Reset view",self._canvas.reset_view))
-        lay.addWidget(mk("+ Zoom","Zoom in",lambda:self._zoom(0.7)))
-        lay.addWidget(mk("– Zoom","Zoom out",lambda:self._zoom(1.4)))
-        lay.addStretch()
+        """Small floating toolbar just below the canvas."""
+        bar = QWidget()
+        bar.setFixedHeight(34)
+        bar.setStyleSheet(f"background:{PANEL}; border-top:1px solid {BORDER};")
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(12, 2, 12, 2)
+        lay.setSpacing(6)
+
+        def mk(label, tip, slot):
+            b = QPushButton(label)
+            b.setObjectName("tool")
+            b.setToolTip(tip)
+            b.clicked.connect(slot)
+            return b
+
+        lay.addWidget(mk("⊙ Fit", "Reset view to fit all nodes", self._canvas.reset_view))
+        lay.addWidget(mk("+ Zoom", "Zoom in", lambda: self._zoom(0.7)))
+        lay.addWidget(mk("– Zoom", "Zoom out", lambda: self._zoom(1.4)))
+
+        lay.addWidget(QLabel("|", ), 0, Qt.AlignmentFlag.AlignVCenter)
+
+       
         self._canvas_info=QLabel("")
         self._canvas_info.setStyleSheet(f"color:{MUTED};font-size:9px;font-family:monospace;")
         lay.addWidget(self._canvas_info)
@@ -1411,9 +1969,16 @@ class GephiApp(QMainWindow):
         self._right.update_label_options(attrs)   # ← populate label combo
         self._metrics_panel.set_graph(self._G)
         self._filter_panel.set_graph(self._G)
-        n=self._summary["nodes"]; e=self._summary["edges"]
+        self._community_panel.set_graph(self._G, self._pos)
+        self._link_panel.set_graph(self._G, self._pos)
+
+        # Header info
+        n = self._summary["nodes"]; e = self._summary["edges"]
         self._graph_info.setText(f"● {n} nodes  ·  {e} edges  ·  {self._summary['type']}")
-        self._graph_info.setStyleSheet(f"color:{SUCCESS};font-size:10px;font-family:monospace;")
+        self._graph_info.setStyleSheet(
+            f"color:{SUCCESS}; font-size:10px; "
+            f"font-family:'JetBrains Mono','Consolas',monospace;"
+        )
         self._canvas_info.setText(f"{n}N  {e}E")
         self._status(f"Graph loaded — {n} nodes, {e} edges")
 
@@ -1478,26 +2043,58 @@ class GephiApp(QMainWindow):
         self._left.show_node(node_id,attrs,neighbors)
         self._right.set_selected_node(node_id)   # ← tell sidebar which node is active
         self._status(
-            f"Node: {node_id}  ·  Degree: {self._G.degree(node_id)}  ·  Neighbors: {len(neighbors)}")
+            f"Node: {node_id}  ·  Degree: {self._G.degree(node_id)}  ·  "
+            f"Neighbors: {len(neighbors)}"
+        )
 
-    def _on_search(self,query):
-        if self._G is None: return
-        target=None
+    def _on_search(self, query: str):
+        if self._G is None:
+            return
+        # Try exact match first, then string match
+        target = None
         for n in self._G.nodes():
-            if str(n)==query: target=n; break
+            if str(n) == query:
+                target = n; break
         if target is None:
             for n in self._G.nodes():
-                if query.lower() in str(n).lower(): target=n; break
+                if query.lower() in str(n).lower():
+                    target = n; break
         if target is not None:
-            self._canvas.selected_node=target; self._canvas.search_node=target
+            self._canvas.selected_node = target
+            self._canvas.search_node = target
             self._canvas.highlight_neighbors(target)
-            self._left.show_node(target,dict(self._G.nodes[target]),list(self._G.neighbors(target)))
-            self._right.set_selected_node(target)
+            attrs = dict(self._G.nodes[target])
+            neighbors = list(self._G.neighbors(target))
+            self._left.show_node(target, attrs, neighbors)
             self._status(f"Found: {target}")
         else:
             self._status(f"Node not found: {query}")
 
-    def _status(self,msg):
+    # ── Export ───────────────────────────────────────────────────────────────
+
+    def _export_canvas(self):
+        if not self._G:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Export Canvas", "network.png", "PNG (*.png)")
+        if path:
+            self._canvas.fig.savefig(path, dpi=200, bbox_inches="tight",
+                                     facecolor=CANVAS_BG)
+            self._status(f"Canvas exported: {os.path.basename(path)}")
+
+    def _export_pyvis(self):
+        if not self._G:
+            return
+        out = "network_interactive.html"
+        try:
+            visualize_pyvis(self._G, out, color_attr="Class",
+                            show_labels=True, title="Social Network")
+            import webbrowser
+            webbrowser.open(os.path.abspath(out))
+            self._status(f"Interactive HTML opened: {out}")
+        except Exception as e:
+            self._status(f"PyVis error: {e}")
+
+    def _status(self, msg: str):
         self._statusbar.showMessage(f"  {msg}")
 
 
@@ -1507,15 +2104,20 @@ class GephiApp(QMainWindow):
 if __name__ == "__main__":
     app=QApplication(sys.argv)
     app.setStyle("Fusion")
-    palette=QPalette()
-    palette.setColor(QPalette.ColorRole.Window,          QColor(BG))
-    palette.setColor(QPalette.ColorRole.WindowText,      QColor(TEXT))
-    palette.setColor(QPalette.ColorRole.Base,            QColor(CARD))
-    palette.setColor(QPalette.ColorRole.AlternateBase,   QColor(PANEL))
-    palette.setColor(QPalette.ColorRole.Text,            QColor(TEXT))
-    palette.setColor(QPalette.ColorRole.Button,          QColor(PANEL))
-    palette.setColor(QPalette.ColorRole.ButtonText,      QColor(TEXT))
-    palette.setColor(QPalette.ColorRole.Highlight,       QColor(CYAN))
+
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window,        QColor(BG))
+    palette.setColor(QPalette.ColorRole.WindowText,    QColor(TEXT))
+    palette.setColor(QPalette.ColorRole.Base,          QColor(CARD))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(PANEL))
+    palette.setColor(QPalette.ColorRole.Text,          QColor(TEXT))
+    palette.setColor(QPalette.ColorRole.Button,        QColor(PANEL))
+    palette.setColor(QPalette.ColorRole.ButtonText,    QColor(TEXT))
+    palette.setColor(QPalette.ColorRole.Highlight,     QColor(CYAN))
     palette.setColor(QPalette.ColorRole.HighlightedText, QColor(BG))
-    app.setPalette(palette); app.setStyleSheet(STYLESHEET)
-    win=GephiApp(); win.show(); sys.exit(app.exec())
+    app.setPalette(palette)
+    app.setStyleSheet(STYLESHEET)
+
+    win = GephiApp()
+    win.show()
+    sys.exit(app.exec())

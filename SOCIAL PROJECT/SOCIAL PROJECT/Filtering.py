@@ -150,22 +150,16 @@ def filter_by_centrality(
 
 def filter_by_membership(
     G: nx.Graph,
-    communities: Optional[Dict[Any, int]] = None,
-    community_ids: Optional[Set[int]] = None,
     classes: Optional[Set[str]] = None,
     class_attr: str = "Class",
 ) -> nx.Graph:
     """
-    Keep nodes that belong to selected communities AND/OR classes.
+    Keep nodes that belong to selected classes.
     """
-    if communities is None:
-        communities = detect_communities(G)
-
     keep: List[Any] = []
     for n, data in G.nodes(data=True):
-        comm_ok  = (community_ids is None) or (communities.get(n) in community_ids)
         class_ok = (classes is None) or (str(data.get(class_attr, "N/A")) in classes)
-        if comm_ok and class_ok:
+        if class_ok:
             keep.append(n)
     return G.subgraph(keep).copy()
 
@@ -328,7 +322,6 @@ def run_filtering_pipeline(
     betweenness_range: Tuple[float, float] = (0.0, 1.0),
     closeness_range: Tuple[float, float]   = (0.4, 1.0),
     pagerank_range: Tuple[float, float]    = (0.0, 1.0),
-    community_ids: Optional[Set[int]]   = None,
     classes: Optional[Set[str]]         = None,
     class_attr: str = "Class",
     filter_mode: str = "centrality",
@@ -348,7 +341,7 @@ def run_filtering_pipeline(
             pagerank_range,
         )
     elif filter_mode == "membership":
-        G_filtered = filter_by_membership(G, communities, community_ids, classes, class_attr)
+        G_filtered = filter_by_membership(G, classes, class_attr)
    
     paths = {}
 

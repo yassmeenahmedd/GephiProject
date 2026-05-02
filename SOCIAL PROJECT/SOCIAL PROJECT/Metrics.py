@@ -296,7 +296,7 @@ def compute_path_lengths(G: nx.Graph) -> Dict[str, Any]:
 def compute_node_metrics_table(G: nx.Graph) -> List[Dict[str, Any]]:
     """
     Build a list-of-dicts (one row per node) with:
-    degree, clustering, weighted_clustering, triangles, eccentricity,
+    degree, clustering, triangles, eccentricity,
     and all node attributes from the original CSV.
     Suitable for display in a GUI table or export to CSV.
     """
@@ -304,7 +304,6 @@ def compute_node_metrics_table(G: nx.Graph) -> List[Dict[str, Any]]:
     UG  = G.to_undirected() if G.is_directed() else G
 
     cc   = nx.clustering(UG)
-    cc_w = nx.clustering(UG, weight="weight")
 
     rows = []
     for node, data in G.nodes(data=True):
@@ -312,7 +311,6 @@ def compute_node_metrics_table(G: nx.Graph) -> List[Dict[str, Any]]:
         row.update(data)                                 # CSV attributes
         row["degree"]              = G.degree(node)
         row["clustering"]          = round(cc.get(node, 0), 4)
-        row["clustering_weighted"] = round(cc_w.get(node, 0), 4)
         if G.is_directed():
             row["in_degree"]  = G.in_degree(node)
             row["out_degree"] = G.out_degree(node)
@@ -448,34 +446,21 @@ def render_clustering_analysis(
 def render_path_length_analysis(
     pl_data: Dict,
     output_path: str,
-    figsize: Tuple[int,int] = (14, 6),
+    figsize: Tuple[int,int] = (9, 6),
     dpi: int = 150,
 ) -> str:
     """
-    2-panel path length figure:
-      [A] Histogram of shortest path lengths
-      [B] Eccentricity distribution
+    Single-panel path length figure:
+      Histogram of shortest path lengths
     """
-    fig = plt.figure(figsize=figsize, facecolor=_BG)
-    gs  = gridspec.GridSpec(1, 2, figure=fig, wspace=0.35)
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax2 = fig.add_subplot(gs[0, 1])
+    fig, ax1 = plt.subplots(figsize=figsize, facecolor=_BG)
 
     k_vals = pl_data["k_vals"]
     counts = pl_data["counts"]
     total  = sum(counts)
     pdf    = [c / total for c in counts]
-     # ── Path histogram ────────────────────────────────────────────────────
-    pk = pl_data["k_vals"]
-    pp = [c/sum(pl_data["counts"]) for c in pl_data["counts"]]
-    ax2.bar(pk, pp, color=_TEAL, alpha=0.85,
-                edgecolor=_PANEL, linewidth=0.3, width=0.55)
-    ax2.axvline(pl_data["apl"], color=_AMBER, linewidth=1.5,
-                    linestyle="--", label=f"APL={pl_data['apl']}")
-    ax2.legend(fontsize=8, facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT)
-    _style_ax(ax2, "Path Length", "Fraction", "Path Length Distribution")
 
-    # ── A: Path length histogram ──────────────────────────────────────────
+    # ── Path length histogram ──────────────────────────────────────────────
     bars = ax1.bar(k_vals, pdf, color=_TEAL, alpha=0.85,
                    edgecolor=_PANEL, linewidth=0.3, width=0.7)
     for bar, p in zip(bars, pdf):
@@ -495,7 +480,7 @@ def render_path_length_analysis(
              ha="right", va="top", fontsize=8.5, color=_AMBER,
              bbox=dict(fc=_BG, ec=_GRID, alpha=0.85, boxstyle="round,pad=0.4"))
 
-    fig.suptitle("Path Length Analysis", color=_TEXT,
+    fig.suptitle("Shortest Path Length Distribution", color=_TEXT,
                  fontsize=15, fontweight="bold")
     plt.savefig(output_path, dpi=dpi, bbox_inches="tight",
                 facecolor=fig.get_facecolor())

@@ -97,6 +97,11 @@ def load_graph_from_csv(
         print("⚠️ Aggregation OFF → keeping all edges")
 
     # ── Choose graph type ─────────────────────────────────────────
+    # If aggregation is OFF, auto-enable multigraph to preserve all edges
+    if not aggregate_duplicate_edges and not use_multigraph:
+        use_multigraph = True
+        print("⚠️ Auto-enabling MultiGraph: aggregation OFF → preserving all edges")
+    
     if use_multigraph:
         G = nx.MultiDiGraph() if directed else nx.MultiGraph()
         print("⚡ Using MultiGraph (keeps duplicate edges)")
